@@ -45,10 +45,7 @@ proc findPublicDir(): string =
   for c in candidates:
     if dirExists(c):
       return c
-  # Bulunamazsa CWD/public döndür (hata mesajı için)
   return candidates[0]
-
-let publicDir = findPublicDir()
 
 # =====================================================================
 #  STATIC FILE SERVING (diskten okur)
@@ -56,16 +53,15 @@ let publicDir = findPublicDir()
 
 proc staticFileHandler*(ctx: Context) {.async, gcsafe.} =
   ## public/ altındaki statik dosyaları diskten oku ve serve et.
-  ## CWD bağımsız — binary'nin yanındaki public/ kullanılır.
+  let pubDir = findPublicDir()  # her istekte hesapla (GC-safe)
   let reqPath = ctx.request.path.strip(chars = {'/'})
 
-  # path traversal koruması
   if ".." in reqPath:
     resp "403 Forbidden", Http403
     return
 
   var filePath = if reqPath.len == 0: "index.html" else: reqPath
-  let absPath = publicDir / filePath
+  let absPath = pubDir / filePath
 
   if not fileExists(absPath):
     resp "404 Not Found: " & filePath, Http404
@@ -82,7 +78,6 @@ proc staticFileHandler*(ctx: Context) {.async, gcsafe.} =
     of ".png": "image/png"
     of ".ico": "image/x-icon"
     else: "application/octet-stream"
-  # Cache-Control: no-store — browser cache'ini önle
   ctx.response.setHeader("Content-Type", ct)
   ctx.response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate")
   resp content, Http200
@@ -149,7 +144,7 @@ echo "║                                                          ║"
 echo "║   espanso Web UI                                         ║"
 echo "║   ─────────────────────────────────────────────────────  ║"
 echo fmt"║   Listening: http://{host}:{port}                       ║"
-echo fmt"║   Public dir: {publicDir}"
+echo fmt"║   Public dir: {findPublicDir()}"
 echo fmt"║   Threads: {numThreads}                                          ║"
 echo "║                                                          ║"
 echo "║   CTRL+C to stop                                         ║"

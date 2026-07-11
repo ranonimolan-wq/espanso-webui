@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+nimcache/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Backup files
+*.bak
+*.tmp-*

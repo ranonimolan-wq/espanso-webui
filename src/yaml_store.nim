@@ -9,9 +9,8 @@
 ##   3. Belirli bir trigger'ı silme/güncelleme
 ##   4. Config dosyalarından kilit alanları parse etme (backend, filter_*, enable)
 ##
-## Bu commit: writeFileSafe için daha güvenli tmp & .bak yedekleme ve
-## (basit) per-file mutex ile eşzamanlı yazma yarışlarını azaltır.
-## (Daha kapsamlı bir NimYAML AST rewrite PR'ı gelecektir.)
+## writeFileSafe: tmp dosyaya yaz + atomic rename. Eski dosyanın .bak
+## yedeğini alır. Single-thread modda lock gerekmez.
 
 import os
 import strutils
@@ -21,27 +20,7 @@ import yaml
 import yaml/dom
 import yaml/stream
 import types
-import locks
 import times
-import random
-
-# =====================================================================
-#  FILE LOCKS (very small helper using locks.Lock)
-# =====================================================================
-
-var fileLocks: Table[string, Lock]
-
-proc getFileLock(path: string): ptr Lock =
-  ## Returns a pointer to a Lock for the given path (creates if missing).
-  ## The table key is the absolute path to avoid duplicates.
-  let abs = path
-  if fileLocks.len == 0:
-    fileLocks = initTable[string, Lock](seq[string]())
-  if not fileLocks.hasKey(abs):
-    var l: Lock
-    initLock(l)
-    fileLocks[abs] = l
-  result = addr fileLocks[abs]
 
 # =====================================================================
 #  LOW-LEVEL FILE I/O
@@ -57,35 +36,29 @@ proc readFileSafe*(path: string): tuple[ok: bool, content: string] =
 proc writeFileSafe*(path: string, content: string): tuple[
     ok: bool, err: string] =
   ## Dosyaya güvenli yaz. Önce tmp'e yaz, sonra rename (atomic).
-  ## Ayrıca eski dosyanın .bak kopyasını alır (uyarsa) ve tmp ismini
-  ## pid+rand ile parçalayıp moveFile yapar.
+  ## Ayrıca eski dosyanın .bak kopyasını alır (yedek için).
+  ## Single-thread modda lock gerekmez; atomic rename yeterli.
   try:
     let dir = path.parentDir()
     if not dir.dirExists():
       createDir(dir)
 
-    # create a simple lock per-file to avoid concurrent writers
-    let lptr = getFileLock(path)
-    lock(lptr[])  # acquire
-    try:
-      # backup existing file
-      if path.fileExists():
-        try:
-          let bak = path & ".bak"
-          copyFile(path, bak)
-        except:
-          # don't fail the whole op on bak hatası — just continue
-          discard
+    # backup existing file
+    if path.fileExists():
+      try:
+        let bak = path & ".bak"
+        copyFile(path, bak)
+      except:
+        # don't fail the whole op on bak hatası — just continue
+        discard
 
-      # tmp name safe
-      let pid = getProcessId().toString()
-      let rnd = $abs(random(1_000_000))
-      let tmp = path & ".tmp-" & pid & "-" & rnd
-      writeFile(tmp, content)
-      # move (rename) — on success, remove tmp
-      moveFile(tmp, path)
-    finally:
-      unlock(lptr[])
+    # tmp name safe (pid + timestamp) — unique
+    let pid = $getCurrentProcessId()
+    let ts = $getTime().toUnix()
+    let tmp = path & ".tmp-" & pid & "-" & ts
+    writeFile(tmp, content)
+    # move (rename) — atomic on same filesystem
+    moveFile(tmp, path)
     return (true, "")
   except:
     return (false, getCurrentExceptionMsg())
@@ -379,6 +352,37 @@ proc isValidYaml*(content: string): tuple[ok: bool, err: string] =
     return (false, "YAML parser error: " & e.msg)
   except:
     return (false, "YAML parse error: " & getCurrentExceptionMsg())
+
+# =====================================================================
+#  MATCH PARSING (NimYAML ile gerçek parse)
+# =====================================================================
+
+type
+  ParsedMatch* = object
+    trigger*: string
+    replace*: string
+    word*: bool
+    propagateCase*: bool
+    uppercaseStyle*: string
+    regex*: string
+    form*: string
+    isForm*: bool
+    fileName*: string
+
+proc mapGet(node: YamlNode, key: string): YamlNode =
+  if node.isNil or node.kind != yMapping:
+    return nil
+  let keyNode = newYamlNode(key)
+  for k, v in node.fields:
+    if k == keyNode:
+      return v
+  return nil
+
+proc scalarContent(node: YamlNode): string =
+  if node.isNil: return ""
+  if node.kind == yScalar:
+    return node.content
+  return ""
 
 proc parseMatchesFromYaml*(yamlContent: string, fileName: string = ""): seq[ParsedMatch] =
   result = @[]
