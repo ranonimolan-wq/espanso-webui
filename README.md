@@ -272,7 +272,7 @@ nim c -d:debug --threads:off --stacktrace --lineTrace --outdir=build/debug src/e
 
 ## Lisans
 
-MIT
+GPL V3
 
 ---
 
