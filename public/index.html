@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>espanso Web UI</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext y='20' font-size='20'%3E%E2%9C%8B%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <!-- ============== HEADER ============== -->
+  <header class="app-header">
+    <div class="header-left">
+      <h1>✋ espanso Web UI</h1>
+      <span id="versionBadge" class="badge badge-muted">v?</span>
+    </div>
+    <div class="header-right">
+      <button id="btnRefresh" class="btn btn-ghost" title="Yenile">↻</button>
+      <button id="btnRestart" class="btn btn-secondary">Espanso Restart</button>
+      <span id="daemonStatus" class="badge badge-unknown">durum?</span>
+    </div>
+  </header>
+
+  <!-- ============== WARNING BANNER (espanso yokken) ============== -->
+  <div id="warningBanner" class="banner banner-warn" hidden>
+    <div class="banner-content">
+      <strong>⚠ Uyarı:</strong> <span id="warningText"></span>
+      <button id="btnDebugInfo" class="btn btn-ghost btn-small">Detaylar ▾</button>
+    </div>
+    <div id="debugPanel" class="debug-panel" hidden>
+      <h4>Debug Bilgisi</h4>
+      <div class="debug-row">
+        <span class="debug-label">Binary yolu:</span>
+        <code id="debugBinPath">—</code>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Process PATH:</span>
+        <code id="debugProcessPath">—</code>
+      </div>
+      <div class="debug-row">
+        <span class="debug-label">Arama logu:</span>
+        <pre id="debugSearchLog" class="debug-log">—</pre>
+      </div>
+      <div class="debug-actions">
+        <button id="btnRetryDetect" class="btn btn-secondary">Tekrar Dene</button>
+      </div>
+      <div class="debug-help">
+        <h5>Çözüm önerileri:</h5>
+        <ul>
+          <li><code>which espanso</code> ile binary yolunu bulun</li>
+          <li>Eğer <code>~/.local/bin/espanso</code>'daysa, PATH'imize otomatik ekledik — yeniden deneyin</li>
+          <li>pm2 kullanıyorsanız: <code>pm2 restart espanso-webui</code></li>
+          <li>Systemd kullanıyorsanız: service dosyasına <code>Environment="PATH=/home/USER/.local/bin:/usr/local/bin:/usr/bin:/bin"</code> ekleyin</li>
+          <li>espanso yeni kurulduysa: <code>espanso env-path register</code> çalıştırın</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== TABS ============== -->
+  <nav class="tabs">
+    <button class="tab active" data-tab="matches">📝 Match'ler</button>
+    <button class="tab" data-tab="files">📁 Dosyalar</button>
+    <button class="tab" data-tab="config">⚙️ Config</button>
+    <button class="tab" data-tab="yaml">✏️ YAML Editör</button>
+  </nav>
+
+  <!-- ============== MAIN ============== -->
+  <main class="content">
+
+    <!-- TAB: MATCHES -->
+    <section id="tab-matches" class="tab-pane active">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Hızlı Match Ekle</h2>
+          <p class="muted">Bir tetikleyici (trigger) ve genişletme (replacement) yaz. espanso otomatik yeniden yükler.</p>
+        </div>
+        <form id="addMatchForm" class="form-grid">
+          <label class="field">
+            <span>Trigger</span>
+            <input type="text" id="mTrigger" placeholder=":hello" required autocomplete="off">
+          </label>
+          <label class="field field-full">
+            <span>Replacement</span>
+            <textarea id="mReplace" placeholder="Merhaba dünya!" rows="3" required></textarea>
+          </label>
+          <label class="field">
+            <span>Hedef dosya</span>
+            <select id="mFile"></select>
+          </label>
+          <label class="field">
+            <span>Uppercase style</span>
+            <select id="mUppercase">
+              <option value="">(yok)</option>
+              <option value="capitalize_words">capitalize_words</option>
+              <option value="capitalize">capitalize</option>
+              <option value="uppercase">uppercase</option>
+            </select>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="mWord">
+            <span>word: true (sadece tam kelime)</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="mPropagate">
+            <span>propagate_case: true (büyük/küçük harf yay)</span>
+          </label>
+          <div class="form-actions field-full">
+            <button type="submit" class="btn btn-primary">+ Ekle</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Tüm Match'ler</h2>
+          <input type="search" id="searchMatches" placeholder="Trigger veya replacement ara..." class="search-input">
+        </div>
+        <div id="matchList" class="match-list">
+          <p class="muted">Yükleniyor...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: FILES -->
+    <section id="tab-files" class="tab-pane">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Match Dosyaları</h2>
+          <button id="btnNewMatchFile" class="btn btn-primary">+ Yeni Dosya</button>
+        </div>
+        <div id="matchFileList" class="file-list">
+          <p class="muted">Yükleniyor...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: CONFIG -->
+    <section id="tab-config" class="tab-pane">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Config Dosyaları</h2>
+          <button id="btnNewConfigFile" class="btn btn-primary">+ Yeni App Config</button>
+        </div>
+        <div id="configFileList" class="file-list">
+          <p class="muted">Yükleniyor...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: YAML EDITOR -->
+    <section id="tab-yaml" class="tab-pane">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>YAML Editör</h2>
+          <div class="editor-actions">
+            <select id="yamlFileSelect"></select>
+            <button id="btnLoadYaml" class="btn btn-ghost">Yükle</button>
+            <button id="btnSaveYaml" class="btn btn-primary">Kaydet</button>
+            <button id="btnValidateYaml" class="btn btn-secondary">Validate</button>
+          </div>
+        </div>
+        <textarea id="yamlEditor" class="yaml-editor" spellcheck="false" placeholder="YAML burada yüklenir..."></textarea>
+        <div id="yamlStatus" class="yaml-status"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============== MODAL ============== -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <header class="modal-header">
+        <h3 id="modalTitle"></h3>
+        <button class="btn btn-ghost modal-close">×</button>
+      </header>
+      <div class="modal-body" id="modalBody"></div>
+      <footer class="modal-footer">
+        <button class="btn btn-ghost modal-cancel">İptal</button>
+        <button class="btn btn-primary modal-ok">Tamam</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============== TOAST ============== -->
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
