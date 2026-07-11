@@ -1,17 +1,6 @@
 ## yaml_store.nim
 ## ===============
-## Espanso YAML dosyalarını oku/yaz.
-##
-## Pragmatic yaklaşım: dosyaları raw YAML string olarak saklarız
-## (round-trip güvenli). Sadece:
-##   1. Match sayısını sayma (matches: altındaki - trigger: sayısı)
-##   2. Yeni basit match ekleme (listeye - append)
-##   3. Belirli bir trigger'ı silme/güncelleme
-##   4. Config dosyalarından kilit alanları parse etme (backend, filter_*, enable)
-##
-## Bu commit: writeFileSafe için daha güvenli tmp & .bak yedekleme ve
-## (basit) per-file mutex ile eşzamanlı yazma yarışlarını azaltır.
-## (Daha kapsamlı bir NimYAML AST rewrite PR'ı gelecektir.)
+## Espanso YAML dosyalarını oku/yaz. (stabilized write and safer append insertion)
 
 import os
 import strutils
@@ -19,70 +8,41 @@ import sequtils
 import tables
 import yaml
 import yaml/dom
-import yaml/stream
 import types
-import locks
-import times
-import random
-
-# =====================================================================
-#  FILE LOCKS (very small helper using locks.Lock)
-# =====================================================================
-
-var fileLocks: Table[string, Lock]
-
-proc getFileLock(path: string): ptr Lock =
-  ## Returns a pointer to a Lock for the given path (creates if missing).
-  ## The table key is the absolute path to avoid duplicates.
-  let abs = path
-  if fileLocks.len == 0:
-    fileLocks = initTable[string, Lock](seq[string]())
-  if not fileLocks.hasKey(abs):
-    var l: Lock
-    initLock(l)
-    fileLocks[abs] = l
-  result = addr fileLocks[abs]
+import file_locks
 
 # =====================================================================
 #  LOW-LEVEL FILE I/O
 # =====================================================================
 
 proc readFileSafe*(path: string): tuple[ok: bool, content: string] =
-  ## Dosyayı güvenli oku. Hata varsa ok=false.
   try:
     return (true, readFile(path))
   except:
     return (false, getCurrentExceptionMsg())
 
-proc writeFileSafe*(path: string, content: string): tuple[
-    ok: bool, err: string] =
-  ## Dosyaya güvenli yaz. Önce tmp'e yaz, sonra rename (atomic).
-  ## Ayrıca eski dosyanın .bak kopyasını alır (uyarsa) ve tmp ismini
-  ## pid+rand ile parçalayıp moveFile yapar.
+proc writeFileSafe*(path: string, content: string): tuple[ok: bool, err: string] =
+  ## Safe write: ensure dir, take per-file lock, backup existing file (.bak),
+  ## write tmp and move to target. Tmp name uses pid suffix if default tmp exists.
   try:
     let dir = path.parentDir()
     if not dir.dirExists():
       createDir(dir)
 
-    # create a simple lock per-file to avoid concurrent writers
-    let lptr = getFileLock(path)
-    lock(lptr[])  # acquire
+    let lptr = file_locks.lockForPath(path)
+    lock(lptr[])
     try:
-      # backup existing file
       if path.fileExists():
         try:
           let bak = path & ".bak"
           copyFile(path, bak)
         except:
-          # don't fail the whole op on bak hatası — just continue
           discard
 
-      # tmp name safe
-      let pid = getProcessId().toString()
-      let rnd = $abs(random(1_000_000))
-      let tmp = path & ".tmp-" & pid & "-" & rnd
+      var tmp = path & ".tmp"
+      if tmp.fileExists():
+        tmp = path & ".tmp-" & $getProcessId()
       writeFile(tmp, content)
-      # move (rename) — on success, remove tmp
       moveFile(tmp, path)
     finally:
       unlock(lptr[])
@@ -95,8 +55,6 @@ proc writeFileSafe*(path: string, content: string): tuple[
 # =====================================================================
 
 proc countMatchesInYaml*(yamlContent: string): int =
-  ## YAML'deki `matches:` altındaki `- trigger:` sayısını say.
-  ## Tam YAML parser'dan daha hızlı ve bozuk dosyalara dayanıklı.
   var inMatchesBlock = false
   var inGlobalVarsBlock = false
   result = 0
@@ -121,15 +79,14 @@ proc countMatchesInYaml*(yamlContent: string): int =
       inc result
 
 # =====================================================================
-#  MATCH APPEND (improved insertion but still line-based)
+#  MATCH APPEND (improved insertion)
 # =====================================================================
 
-proc buildYamlMatchEntry*(m: SimpleMatch): string =
+proc buildYamlMatchEntry*(m: SimpleMatch): seq[string] =
   var lines: seq[string] = @[]
-
   let t = m.trigger
   var triggerLine: string
-  if t.contains("\"") or t.contains("\\"):
+  if t.contains('"') or t.contains('\\'):
     let escaped = t.replace("'", "''")
     triggerLine = "  - trigger: '" & escaped & "'"
   else:
@@ -148,7 +105,7 @@ proc buildYamlMatchEntry*(m: SimpleMatch): string =
       lines.add(bodyIndent & bl)
   else:
     let r = m.replace
-    if r.contains("\"") or r.contains("\\") or r.contains(":") or
+    if r.contains('"') or r.contains('\\') or r.contains(":" ) or
        r.contains("#") or r.startsWith("{") or r.startsWith("["):
       let escapedR = r.replace("'", "''")
       lines.add("    replace: '" & escapedR & "'")
@@ -162,13 +119,11 @@ proc buildYamlMatchEntry*(m: SimpleMatch): string =
   if m.uppercaseStyle.len > 0:
     lines.add("    uppercase_style: " & m.uppercaseStyle)
 
-  result = lines.join("\n")
+  return lines
 
 proc appendMatchToYaml*(yamlContent: string, m: SimpleMatch): string =
-  ## Daha güvenli append: matches bloğu yoksa ekle, varsa son match'ten sonra ekle.
-  ## Bu fonksiyon artık per-file yazma lock'u kullanan writeFileSafe ile birlikte
-  ## kullanıldığı durumda daha güvenlidir.
-  let entry = buildYamlMatchEntry(m)
+  ## Append by inserting entry lines into the file lines to keep indexes correct.
+  let entryLines = buildYamlMatchEntry(m)
 
   var lines = yamlContent.split("\n")
   var hadTrailingNewline = false
@@ -205,19 +160,22 @@ proc appendMatchToYaml*(yamlContent: string, m: SimpleMatch): string =
         break
       insertAfter = i
 
-    lines.insert(entry, insertAfter + 1)
+    let head = lines[0 ..< insertAfter+1]
+    let tail = if insertAfter + 1 < lines.len: lines[insertAfter+1 .. ^1] else: @[]
+    lines = head & entryLines & tail
   else:
     if lines.len > 0 and lines[^1].strip().len > 0:
       lines.add("")
     lines.add("matches:")
-    lines.add(entry)
+    for l in entryLines: lines.add(l)
 
-  result = lines.join("\n")
+  var resultStr = lines.join("\n")
   if hadTrailingNewline:
-    result.add("\n")
+    resultStr.add("\n")
+  return resultStr
 
 # =====================================================================
-#  MATCH DELETE / UPDATE (line-based but robust searching)
+#  MATCH DELETE / UPDATE (unchanged)
 # =====================================================================
 
 type
@@ -256,8 +214,7 @@ proc findMatchEntries*(lines: seq[string], matchesBlockStart: int): seq[MatchLoc
     else:
       inc i
 
-proc deleteMatchByTrigger*(yamlContent: string, trigger: string): tuple[
-    ok: bool, newYaml: string, deleted: bool] =
+proc deleteMatchByTrigger*(yamlContent: string, trigger: string): tuple[ok: bool, newYaml: string, deleted: bool] =
   result = (false, yamlContent, false)
   var lines = yamlContent.split("\n")
   var hadTrailingNewline = false
@@ -292,7 +249,7 @@ proc deleteMatchByTrigger*(yamlContent: string, trigger: string): tuple[
   return (true, yamlContent, false)
 
 # =====================================================================
-#  CONFIG FILE PARSING & LISTING (unchanged mostly)
+#  CONFIG FILE PARSING & LISTING
 # =====================================================================
 
 proc parseConfigFile*(rawYaml: string): AppConfigFile =
@@ -301,8 +258,7 @@ proc parseConfigFile*(rawYaml: string): AppConfigFile =
     let stripped = line.strip()
     if stripped.startsWith("backend:"):
       result.backend = stripped.substr("backend:".len).strip()
-      if result.backend.len >= 2 and result.backend[0] == '"' and
-         result.backend[^1] == '"':
+      if result.backend.len >= 2 and result.backend[0] == '"' and result.backend[^1] == '"':
         result.backend = result.backend[1 ..< ^1]
     elif stripped.startsWith("enable:"):
       let v = stripped.substr("enable:".len).strip().toLowerAscii()
