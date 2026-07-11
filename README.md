@@ -74,20 +74,20 @@ nimble run
 ```
 
 ---
-
+> **Unutmadan:** Derleme sonrası `build/espanso_webui` binary'sini ana dizine taşıyın.
 ## Çalıştırma
 
 ### Doğrudan çalıştırma
 
 ```bash
-./build/espanso_webui
+./espanso_webui
 # Varsayılan: http://127.0.0.1:7777, 2 thread
 ```
 
 Özel port/host/thread ile:
 
 ```bash
-./build/espanso_webui --host=0.0.0.0 --port=8080 --threads=4
+./espanso_webui --host=0.0.0.0 --port=8080 --threads=4
 ```
 
 Tarayıcıda aç: http://127.0.0.1:7777
