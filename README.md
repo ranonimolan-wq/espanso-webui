@@ -74,8 +74,8 @@ nimble run
 ```
 
 ---
-> **Unutmadan:** Derleme sonrası `build/espanso_webui` binary'sini ana dizine taşıyın.
-## Çalıştırma
+> **Unutmadan:** Derleme sonrası `build/espanso_webui` binary'sini ana dizine taşıyın eger linux kullaniyorsanız ana dizinde zaten bir binary olacaktır onu kullanabilirsiniz.
+> ## Çalıştırma
 
 ### Doğrudan çalıştırma
 
