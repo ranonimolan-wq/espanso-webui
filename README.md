@@ -17,6 +17,8 @@ Espanso harika bir metin genişletici (text expander). Ama ayar dosyaları YAML 
 - Tek tıkla espanso yeniden başlat
 - Mevcut match'lerde arama
 
+![espanso Web UI](screenshots/ui-preview.png)
+
 ---
 
 ## Özellikler
