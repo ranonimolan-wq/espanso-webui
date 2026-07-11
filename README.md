@@ -51,7 +51,7 @@ Espanso harika bir metin genişletici (text expander). Ama ayar dosyaları YAML 
 ### 1. Kaynak kodu indir
 
 ```bash
-git clone <repo-url> espanso-webui
+git clone https://github.com/ranonimolan-wq/espanso-webui
 cd espanso-webui
 ```
 
